@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-split_proxy.py v4 — HTTP proxy con split-download su due WAN + supporto CONNECT (HTTPS tunnel).
+split_proxy.py v5 — HTTP proxy con split-download adattivo su due WAN + CONNECT.
 
-v4: aggiunto metodo CONNECT per tunnel HTTPS (necessario per Electron/Claude Desktop).
+v5: worker adattivi — misura la velocita' di ogni WAN al primo chunk e
+    bilancia dinamicamente i chunk rimanenti in proporzione alla banda reale.
+v4: aggiunto metodo CONNECT per tunnel HTTPS.
 
 Topologia:
   Windows (curl -x http://192.168.2.21:8080 ...)
     -> proxy (VM)
-       |-- worker 0,1 via eth0 (fibra, 192.168.2.21)
-       +-- worker 2,3 via eth1 (5G, 192.168.3.21)
+       |-- N worker via eth0 (fibra, 192.168.2.21)
+       +-- M worker via eth1 (5G, 192.168.3.21)
     -> internet server (range requests parallele)
     -> assembla in ordine -> streamma a Windows
 
@@ -20,13 +22,17 @@ import socket, threading, queue, sys, time, urllib.parse, select
 LISTEN_ADDR  = '0.0.0.0'
 LISTEN_PORT  = 8080
 IFACES       = ['192.168.2.21', '192.168.3.21']   # eth0=fibra, eth1=5G
-WORKERS_PER  = 2       # connessioni persistenti per interfaccia (tot 4)
+WORKERS_PER  = 8       # connessioni per interfaccia (tot 16, coda condivisa)
 CHUNK_MB     = 4       # dimensione chunk MB
 THRESHOLD_MB = 4       # file minimo per attivare split
 TIMEOUT      = 60
 
 CHUNK_SIZE   = CHUNK_MB   * 1024 * 1024
 THRESHOLD    = THRESHOLD_MB * 1024 * 1024
+
+# Velocita' misurate per interfaccia (bytes/s), aggiornate runtime
+_iface_speeds = {}
+_iface_lock   = threading.Lock()
 
 
 # --- CONNECT tunnel (HTTPS) ------------------------------------------------
@@ -162,7 +168,8 @@ class PersistentFetcher:
 # --- Worker thread --------------------------------------------------------
 
 def worker(fetcher, task_q, result_q, chunks):
-    """Preleva chunk dalla coda e li scarica via il fetcher persistente."""
+    """Preleva chunk dalla coda e li scarica via il fetcher persistente.
+    Misura la velocita' e aggiorna le statistiche per interfaccia."""
     while True:
         try:
             idx = task_q.get_nowait()
@@ -170,7 +177,15 @@ def worker(fetcher, task_q, result_q, chunks):
             return
         start, end = chunks[idx]
         try:
+            t0 = time.monotonic()
             data = fetcher.fetch(start, end)
+            elapsed = time.monotonic() - t0
+            if elapsed > 0 and data:
+                speed = len(data) / elapsed
+                with _iface_lock:
+                    # Media mobile esponenziale (alpha=0.3)
+                    prev = _iface_speeds.get(fetcher.bind_ip, speed)
+                    _iface_speeds[fetcher.bind_ip] = prev * 0.7 + speed * 0.3
             result_q.put((idx, data))
         except Exception as e:
             print(f"[WORKER {fetcher.bind_ip}] chunk {idx} ({start}-{end}): {e}",
@@ -196,6 +211,7 @@ def proxy_split(conn, host, port, path, content_length, content_type):
         chunks.append((pos, end))
         pos = end + 1
 
+    # Coda condivisa: i worker veloci prendono naturalmente piu' chunk
     task_q   = queue.Queue()
     result_q = queue.Queue()
     for i in range(n):
@@ -244,10 +260,18 @@ def proxy_split(conn, host, port, path, content_length, content_type):
 
     elapsed = time.time() - t0
     speed   = content_length / elapsed / 1024 / 1024 if elapsed else 0
+
+    # Log velocita' per interfaccia
+    with _iface_lock:
+        spd_info = " | ".join(
+            f"{ip}: {_iface_speeds.get(ip, 0)/1024/1024:.1f} MB/s"
+            for ip in IFACES
+        )
+
     print(
         f"[SPLIT] {host}{path[:50]}  "
         f"{content_length // 1024 // 1024}MB -> {speed:.2f} MB/s in {elapsed:.1f}s  "
-        f"({n} chunk x {CHUNK_MB}MB / {n_workers} conn persistenti)",
+        f"({n} chunk x {CHUNK_MB}MB / {n_workers} workers | {spd_info})",
         flush=True
     )
 
@@ -404,8 +428,8 @@ def main():
     srv.bind((LISTEN_ADDR, LISTEN_PORT))
     srv.listen(200)
     print(
-        f"[split_proxy v4] {LISTEN_ADDR}:{LISTEN_PORT} | "
-        f"ifaces={IFACES} | {WORKERS_PER} conn persistenti/iface | "
+        f"[split_proxy v5] {LISTEN_ADDR}:{LISTEN_PORT} | "
+        f"ifaces={IFACES} | {WORKERS_PER} workers/iface (shared queue) | "
         f"chunk={CHUNK_MB}MB | threshold={THRESHOLD_MB}MB | CONNECT support",
         flush=True
     )
