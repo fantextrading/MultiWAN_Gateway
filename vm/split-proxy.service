@@ -1,0 +1,15 @@
+[Unit]
+Description=Split-download HTTP proxy (multi-WAN aggregation + HTTPS CONNECT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/split_proxy.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/split-proxy.log
+StandardError=append:/var/log/split-proxy.log
+
+[Install]
+WantedBy=multi-user.target

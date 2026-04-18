@@ -1,0 +1,17 @@
+[Unit]
+Description=Glorytun MUD client (multi-WAN VPN aggregation)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/killall glorytun-clean
+ExecStartPre=-/sbin/ip link del tun0
+ExecStart=/usr/local/bin/glorytun-client-start.sh
+Restart=on-failure
+RestartSec=15
+StandardOutput=append:/var/log/glorytun-client.log
+StandardError=append:/var/log/glorytun-client.log
+
+[Install]
+WantedBy=multi-user.target

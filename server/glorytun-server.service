@@ -1,0 +1,18 @@
+[Unit]
+Description=Glorytun multipath VPN server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Ricrea tun0 ad ogni avvio (elimina residui da crash precedenti)
+ExecStartPre=-/usr/sbin/ip link del tun0
+ExecStart=/usr/local/bin/glorytun bind keyfile /etc/glorytun/key \
+    dev tun0 from addr 0.0.0.0 port 65001 persist
+# Configura tun0 dopo l'avvio di glorytun
+ExecStartPost=/bin/bash -c "sleep 2 && ip addr add 10.255.255.1/30 dev tun0 2>/dev/null; ip link set tun0 up"
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
