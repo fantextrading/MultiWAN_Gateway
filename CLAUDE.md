@@ -285,7 +285,9 @@ MultiWAN_Gateway/
 │   └── glorytun-server.service     # systemd unit server VPS
 └── windows/
     ├── set_proxy.ps1               # attiva/disattiva proxy di sistema
-    └── set_route.cmd               # configura routing (da eseguire come admin)
+    ├── set_route.cmd               # configura routing (da eseguire come admin)
+    ├── use_vm_gateway.cmd          # switch a ECMP via VM (admin)
+    └── use_5g_only.cmd             # switch a 5G diretto Windows nativo (admin)
 ```
 
 ---
