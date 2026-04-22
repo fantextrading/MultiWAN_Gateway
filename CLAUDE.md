@@ -179,6 +179,59 @@ systemctl restart glorytun-client
 
 ---
 
+## Post-reboot (PC Windows o VM)
+
+**Al riavvio non serve fare nulla** — tutto è persistente:
+
+| Componente | Persistenza |
+|---|---|
+| VM servizi (`glorytun-client`, `split-proxy`) | `systemctl enable` → autostart al boot |
+| VM ECMP route | Ricreata dallo startup script a ogni avvio servizio |
+| VM sysctl (ip_forward, ECMP hash) | `/etc/sysctl.d/99-gateway.conf` |
+| Windows route metric 5 → VM | `route -p change ...` (permanente) |
+| Windows proxy `192.168.2.21:8080` | Registry HKCU (sopravvive al reboot) |
+
+### Caveat: DHCP vs ECMP dopo reboot VM
+
+Dopo un reboot della VM il DHCP client può reinstallare route default concorrenti
+(metric 101/102/200) che "coprono" l'ECMP nexthop. Se noti velocità dimezzata
+(solo fibra o solo 5G invece dell'aggregato):
+
+```bash
+ssh root@192.168.3.21 "systemctl restart glorytun-client"
+```
+
+Lo startup script riapplica l'ECMP sovrascrivendo le route DHCP.
+
+### Test rapido post-reboot
+
+Da Windows (proxy di sistema già attivo):
+
+```cmd
+curl -x http://192.168.2.21:8080 -o NUL -w "%{speed_download}\n" http://speedtest.tele2.net/1GB.zip
+```
+
+- **~20+ MB/s (160+ Mbits)** → tutto ok, aggregazione attiva
+- **<10 MB/s** → ECMP sovrascritto da DHCP, fai restart glorytun-client (vedi sopra)
+
+### Ripristino completo da zero
+
+Se qualcosa si è rotto davvero (es. file cancellati, servizi disabilitati):
+
+```bash
+# Dalla cartella del progetto su Windows:
+python deploy.py        # ridistribuisce tutto su VM + Server
+python deploy.py status # verifica
+```
+
+Poi da CMD admin su Windows (solo se la route non c'è più):
+
+```cmd
+route -p change 0.0.0.0 mask 0.0.0.0 192.168.2.21 metric 5
+```
+
+---
+
 ## Verifica e diagnostica
 
 ```bash

@@ -22,8 +22,9 @@ import socket, threading, queue, sys, time, urllib.parse, select
 LISTEN_ADDR  = '0.0.0.0'
 LISTEN_PORT  = 8080
 IFACES       = ['192.168.2.21', '192.168.3.21']   # eth0=fibra, eth1=5G
-WORKERS_PER  = 8       # connessioni per interfaccia (tot 16, coda condivisa)
-CHUNK_MB     = 4       # dimensione chunk MB
+# Worker per interfaccia — pesati sulla capacita' (5G ~3x la fibra)
+WORKERS_MAP  = {'192.168.2.21': 4, '192.168.3.21': 12}   # tot 16, coda condivisa
+CHUNK_MB     = 16      # dimensione chunk MB (bigger = meno overhead, window TCP piu' aperta)
 THRESHOLD_MB = 4       # file minimo per attivare split
 TIMEOUT      = 60
 
@@ -199,7 +200,7 @@ def worker(fetcher, task_q, result_q, chunks):
 
 def proxy_split(conn, host, port, path, content_length, content_type):
     t0 = time.time()
-    n_workers = len(IFACES) * WORKERS_PER
+    n_workers = sum(WORKERS_MAP.values())
 
     # Calcola chunk list
     n      = max(n_workers, (content_length + CHUNK_SIZE - 1) // CHUNK_SIZE)
@@ -219,7 +220,7 @@ def proxy_split(conn, host, port, path, content_length, content_type):
 
     # Lancia worker con connessioni persistenti
     for iface in IFACES:
-        for _ in range(WORKERS_PER):
+        for _ in range(WORKERS_MAP.get(iface, 4)):
             try:
                 f = PersistentFetcher(host, port, path, iface)
                 threading.Thread(
@@ -429,7 +430,7 @@ def main():
     srv.listen(200)
     print(
         f"[split_proxy v5] {LISTEN_ADDR}:{LISTEN_PORT} | "
-        f"ifaces={IFACES} | {WORKERS_PER} workers/iface (shared queue) | "
+        f"ifaces={IFACES} | workers={WORKERS_MAP} (shared queue) | "
         f"chunk={CHUNK_MB}MB | threshold={THRESHOLD_MB}MB | CONNECT support",
         flush=True
     )
